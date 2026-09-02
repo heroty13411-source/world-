@@ -614,3 +614,8 @@ yarn build:production
 php artisan view:clear
 chown -R www-data:www-data /var/www/pterodactyl/*
 chown -R www-data:www-data /var/www/pterodactyl/.*
+cd /var/www/pterodactyl 
+yarn add xterm-addon-unicode11
+yarn build
+chown -R www-data:www-data /var/www/pterodactyl/*
+cd
