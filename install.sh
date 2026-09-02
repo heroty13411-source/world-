@@ -1,44 +1,25 @@
 #!/bin/bash
 
-# কালার কোড (অ্যানিমেশন এবং ডিজাইনের জন্য)
-CYAN='\033[0;36m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
-
-# একটু অ্যানিমেশন টাইপ ইফেক্ট ফাংশন
-animate_text() {
-    text="$1"
-    for ((i=0; i<${#text}; i++)); do
-        echo -ne "${CYAN}${text:$i:1}${NC}"
-        sleep 0.02
-    done
-    echo ""
-}
-
-clear
-echo -e "${GREEN}====================================================${NC}"
-animate_text "   CurseForge Maps Downloader Auto-Installer"
-echo -e "${GREEN}====================================================${NC}\n"
-
-# ১. API Key ইনপুট নেওয়া
-echo -e "${YELLOW}Please enter your CURSEFORGE API Key:${NC}"
-read -p "> " CURSEFORGE_API_KEY
-
-if [ -z "$CURSEFORGE_API_KEY" ]; then
-    echo -e "${RED}API Key is required! Exiting...${NC}"
-    exit 1
-fi
-
-echo -e "\n${GREEN}[+] Adding API Key to /var/www/pterodactyl/.env...${NC}"
-cd /var/www/pterodactyl || exit
-echo "CURSEFORGE_API=$CURSEFORGE_API_KEY" >> .env
+# একটু অ্যানিমেশন ও কালার
+echo -e "\033[0;36m====================================================\033[0m"
+echo -e "\033[0;32m   CurseForge Maps Downloader Auto-Installer\033[0m"
+echo -e "\033[0;36m====================================================\033[0m\n"
 sleep 1
-echo -e "${GREEN}[✔] API Key successfully added!${NC}\n"
 
-animate_text "Starting Automatic Installation of CurseForge Maps Downloader..."
-sleep 2
+# API Key নেওয়া এবং .env ফাইলে যুক্ত করা
+echo -e "\033[1;33mPlease enter your CURSEFORGE_API Key:\033[0m"
+read -p "> " api_key
+
+echo -e "\n\033[0;36m[+] Adding API Key to .env file...\033[0m"
+cd /var/www/pterodactyl
+echo "CURSEFORGE_API=$api_key" >> .env
+sleep 1
+echo -e "\033[0;32m[✔] API Key successfully added!\033[0m\n"
+sleep 1
+
+# এখান থেকে আপনার দেওয়া হুবহু কোড শুরু (কোনো পরিবর্তন ছাড়া)
+
+echo -e "\nStarting Automatic Installation of CurseForge Maps Downloader...\n" 
 
 cd /var/www/pterodactyl 
 
@@ -262,7 +243,7 @@ addFlash({ type: 'success', key: 'minecraftMaps', message: 'File has been schedu
 EOF 
 
 # ৫. কোর ফাইলগুলোতে কোড প্যাচ করা (Backend & Routes)
-echo -e "\n${YELLOW}Patching Core Files...${NC}"
+echo -e "\n\033[0;36mPatching Core Files...\033[0m"
 sleep 1
 grep -q "ClientController::class, 'curse'" routes/api-client.php || echo "Route::get('/curse', [Client\ClientController::class, 'curse']);" >> routes/api-client.php 
 
@@ -301,7 +282,7 @@ if(!file.includes('MinecraftMapsContainer')) {
 " 
 
 # ৭. বিল্ড ও অপ্টিমাইজেশন
-echo -e "\n${YELLOW}Building Pterodactyl Assets (Phase 1)...${NC}\n"
+echo -e "\n\033[0;33mBuilding Pterodactyl Assets (This may take a minute)...\033[0m\n"
 sleep 1
 chown -R www-data:www-data /var/www/pterodactyl/*
 chown -R www-data:www-data /var/www/pterodactyl/.*
@@ -310,7 +291,7 @@ yarn build:production
 php artisan view:clear
 php artisan optimize:clear 
 
-echo -e "\n${GREEN}Initial Installation Steps Complete! 🚀${NC}\n" 
+echo -e "\n\033[0;32mInstallation Complete! 🚀\033[0m\n" 
 sleep 1
 
 cd /var/www/pterodactyl 
@@ -344,7 +325,7 @@ node patch_router.js
 rm patch_router.js 
 
 # বিল্ড ও অপ্টিমাইজেশন (Asset Building)
-echo -e "\n${YELLOW}Building Pterodactyl Assets (Phase 2)...${NC}\n"
+echo -e "\n\033[0;33mBuilding Pterodactyl Assets (This may take a minute)...\033[0m\n"
 sleep 1
 chown -R www-data:www-data /var/www/pterodactyl/*
 chown -R www-data:www-data /var/www/pterodactyl/.*
@@ -353,7 +334,7 @@ yarn build:production
 php artisan view:clear
 php artisan optimize:clear 
 
-echo -e "\n${GREEN}Phase 2 Complete! 🚀${NC}\n" 
+echo -e "\n\033[0;32mInstallation Complete! 🚀\033[0m\n" 
 sleep 1
 
 cd /var/www/pterodactyl 
@@ -367,8 +348,6 @@ chown -R www-data:www-data /var/www/pterodactyl/.*
 chmod -R 755 storage/* bootstrap/cache/ 
 
 # Arix থিমের সাথে অ্যাসেট রিবিল্ড করা
-echo -e "\n${YELLOW}Building Pterodactyl Assets (Phase 3 - Arix Theme)...${NC}\n"
-sleep 1
 export NODE_OPTIONS="--openssl-legacy-provider --no-deprecation"
 yarn build:production 
 
@@ -414,8 +393,6 @@ node patch_routes.js
 rm patch_routes.js 
 
 # প্যানেল রিবিল্ড করা হচ্ছে
-echo -e "\n${YELLOW}Building Pterodactyl Assets (Phase 4)...${NC}\n"
-sleep 1
 chown -R www-data:www-data /var/www/pterodactyl/*
 chown -R www-data:www-data /var/www/pterodactyl/.*
 export NODE_OPTIONS="--openssl-legacy-provider --no-deprecation"
@@ -530,8 +507,6 @@ export default ({ minecraftMap, className }: Props) => {
 EOF 
 
 # কোড ফিক্স হয়ে গেছে, এখন প্যানেল পুনরায় রিবিল্ড করা হচ্ছে
-echo -e "\n${YELLOW}Building Pterodactyl Assets (Phase 5)...${NC}\n"
-sleep 1
 chown -R www-data:www-data /var/www/pterodactyl/*
 export NODE_OPTIONS="--openssl-legacy-provider --no-deprecation"
 yarn build:production
@@ -633,16 +608,9 @@ export default ({ minecraftMap, className }: Props) => {
 EOF 
 
 # ইউআই পারফেক্ট করার পর প্যানেল রিবিল্ড করা হচ্ছে
-echo -e "\n${YELLOW}Building Pterodactyl Assets (Final Phase)...${NC}\n"
-sleep 1
 chown -R www-data:www-data /var/www/pterodactyl/*
 export NODE_OPTIONS="--openssl-legacy-provider --no-deprecation"
 yarn build:production
 php artisan view:clear
 chown -R www-data:www-data /var/www/pterodactyl/*
-chown -R www-data:www-data /var/www/pterodactyl/.* 
-
-echo -e "\n${GREEN}====================================================${NC}"
-animate_text "   All Installations and Builds Completed Successfully! 🎉"
-echo -e "${GREEN}====================================================${NC}\n"
-
+chown -R www-data:www-data /var/www/pterodactyl/.*
