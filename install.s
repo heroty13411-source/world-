@@ -1,147 +1,648 @@
 #!/bin/bash
-# Pterodactyl CurseForge Maps Downloader Auto-Installer
-# Powered By SKA
 
-echo "==============================================="
-echo "  CurseForge Maps Downloader Auto-Installer    "
-echo "==============================================="
+# কালার কোড (অ্যানিমেশন এবং ডিজাইনের জন্য)
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# একটু অ্যানিমেশন টাইপ ইফেক্ট ফাংশন
+animate_text() {
+    text="$1"
+    for ((i=0; i<${#text}; i++)); do
+        echo -ne "${CYAN}${text:$i:1}${NC}"
+        sleep 0.02
+    done
+    echo ""
+}
+
+clear
+echo -e "${GREEN}====================================================${NC}"
+animate_text "   CurseForge Maps Downloader Auto-Installer"
+echo -e "${GREEN}====================================================${NC}\n"
 
 # ১. API Key ইনপুট নেওয়া
-read -p "Please enter your CFCore API Key: " API_KEY
+echo -e "${YELLOW}Please enter your CURSEFORGE API Key:${NC}"
+read -p "> " CURSEFORGE_API_KEY
 
-# ২. গ্লোবাল ইন্সটলেশন
-echo "* Installing global dependencies..."
-npm install --global yarn
+if [ -z "$CURSEFORGE_API_KEY" ]; then
+    echo -e "${RED}API Key is required! Exiting...${NC}"
+    exit 1
+fi
 
-# ৩. ডিরেক্টরিতে প্রবেশ
-cd /var/www/pterodactyl || { echo "Pterodactyl directory not found!"; exit 1; }
+echo -e "\n${GREEN}[+] Adding API Key to /var/www/pterodactyl/.env...${NC}"
+cd /var/www/pterodactyl || exit
+echo "CURSEFORGE_API=$CURSEFORGE_API_KEY" >> .env
+sleep 1
+echo -e "${GREEN}[✔] API Key successfully added!${NC}\n"
 
-# ৪. cat কমান্ড দিয়ে .env ফাইলে API Key যুক্ত করা
-echo "* Adding API Key to .env file..."
-cat <<EOF >> .env
+animate_text "Starting Automatic Installation of CurseForge Maps Downloader..."
+sleep 2
 
-CURSEFORGE_API=$API_KEY
-EOF
+cd /var/www/pterodactyl 
 
-# ৫. গিটহাব থেকে ফাইল ডাউনলোড ও এক্সট্র্যাক্ট
-echo "* Downloading files from GitHub..."
-curl -sL https://raw.githubusercontent.com/heroty13411-source/world-/main/upload.zip -o upload.zip
-echo "* Extracting files..."
-unzip -o upload.zip
-rm upload.zip
+# ১. ফোল্ডার তৈরি করা হচ্ছে
+mkdir -p resources/scripts/api/swr
+mkdir -p resources/scripts/components/server/maps 
 
-# ৬. cat কমান্ড দিয়ে ফাইলগুলোর ১০০% সঠিক মডিফিকেশন 
-echo "* Modifying code files automatically..."
+# ২. getMinecraftMaps.ts ফাইল তৈরি
+cat << 'EOF' > resources/scripts/api/swr/getMinecraftMaps.ts
+import useSWR from 'swr';
+import http, { PaginatedResult } from '@/api/http';
+import { createContext, useContext } from 'react'; 
 
-# ClientController.php - Imports
-cat << 'CODE_EOF' > cc_uses.txt
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Cache;
-CODE_EOF
-sed -i -e "/use Pterodactyl\\\\Http\\\\Requests\\\\Api\\\\Client\\\\GetServersRequest;/r cc_uses.txt" app/Http/Controllers/Api/Client/ClientController.php
+interface ctx {
+    page: number;
+    setPage: (value: number | ((s: number) => number)) => void;
+    searchFilter: string;
+    setSearchFilter: (value: string | ((s: string) => string)) => void;
+} 
 
-# ClientController.php - Main Function
-cat << 'CODE_EOF' > cc_func.txt
+export const Context = createContext<ctx>({ page: 1, setPage: () => 1, searchFilter: '', setSearchFilter: () => '' }); 
 
-    public function curse(Request $request)
-    {
-        $headers = ['x-api-key' => env('CURSEFORGE_API')];
+export default () => {
+    const { page, searchFilter } = useContext(Context); 
 
-        $response = Http::withHeaders($headers)->get('https://api.curseforge.com/v1/mods/search', [
-            'index' => $request['index'],
-            'pageSize' => $request['pageSize'],
-            'gameId' => $request['gameId'],
-            'classId' => $request['sectionId'],
-            'searchFilter' => $request['searchFilter'],
-            'sortField' => 2,
-            'sortOrder' => 'desc'
-        ])->json();
+    return useSWR<PaginatedResult<any>>([ 'server:minecraftMaps', page, searchFilter ], async () => {
+        const { data } = await http.get('/api/client/curse', { params: { index: page - 1 + (page - 1) * 10, pageSize: 10, gameId: 432, searchFilter, sectionId: 17 }, timeout: 120000 }); 
 
-        $mods = collect($response['data'])->map(function ($mod) use ($request, $headers) {
-            foreach ($mod['latestFiles'] as &$modFile) {
-                $modFile['downloadUrl'] = str_replace("edge", "mediafiles", $modFile['downloadUrl']);
-            }
-            return $mod;
+        return ({
+            items: (data.mods || []),
+            pagination: { total: data.pagination.totalCount, count: data.pagination.resultCount, perPage: data.pagination.pageSize, currentPage: page, totalPages: data.pagination.totalCount / data.pagination.pageSize },
         });
+    });
+};
+EOF 
 
-        return [
-            'mods' => $mods,
-            'pagination' => $response['pagination'],
-        ];
-    }
-CODE_EOF
-awk 'NR==FNR{a=a$0"\n";next} /public function permissions\(\)/{printf "%s\n", a; print; next}1' cc_func.txt app/Http/Controllers/Api/Client/ClientController.php > tmp.php && mv tmp.php app/Http/Controllers/Api/Client/ClientController.php
+# ৩. MinecraftMapsContainer.tsx ফাইল তৈরি
+cat << 'EOF' > resources/scripts/components/server/maps/MinecraftMapsContainer.tsx
+import React, { useContext, useEffect, useState } from 'react';
+import Spinner from '@/components/elements/Spinner';
+import useFlash from '@/plugins/useFlash';
+import { Form, Formik } from 'formik';
+import FlashMessageRender from '@/components/FlashMessageRender';
+import MinecraftMapsRow from '@/components/server/maps/MinecraftMapsRow';
+import tw from 'twin.macro';
+import Field from '@/components/elements/Field';
+import { object, string } from 'yup';
+import getMinecraftMaps, { Context as ServerMinecraftMapsContext } from '@/api/swr/getMinecraftMaps';
+import ServerContentBlock from '@/components/elements/ServerContentBlock';
+import Pagination from '@/components/elements/Pagination'; 
 
-# routes/api-client.php
-cat << 'CODE_EOF' > route_mod.txt
-Route::get('/curse', [Client\ClientController::class, 'curse']);
-CODE_EOF
-sed -i -e "/Route::get('\/permissions'/r route_mod.txt" routes/api-client.php
+interface Values {
+    search: string;
+} 
 
-# ServerTransformer.php
-cat << 'CODE_EOF' > transformer_mod.txt
-            'nest_id' => $server->nest_id,
-CODE_EOF
-sed -i -e "/'internal_id' => \$server->id,/r transformer_mod.txt" app/Transformers/Api/Client/ServerTransformer.php
+const MinecraftMapsContainer = () => {
+    const { page, setPage, searchFilter, setSearchFilter } = useContext(ServerMinecraftMapsContext);
+    const { clearFlashes, clearAndAddHttpError } = useFlash();
+    const { data: minecraftMaps, error, isValidating } = getMinecraftMaps(); 
 
-# getServer.ts
-cat << 'CODE_EOF' > ts1.txt
-    nestId: number | string;
-CODE_EOF
-sed -i -e "/internalId: number | string;/r ts1.txt" resources/scripts/api/server/getServer.ts
+    const submit = ({ search }: Values) => {
+        clearFlashes('minecraftMaps');
+        setSearchFilter(search);
+    }; 
 
-cat << 'CODE_EOF' > ts2.txt
-        nestId: data.nest_id,
-CODE_EOF
-sed -i -e "/internalId: data.internal_id,/r ts2.txt" resources/scripts/api/server/getServer.ts
+    useEffect(() => {
+        if (!error) {
+            clearFlashes('minecraftMaps');
+            return;
+        }
+        clearAndAddHttpError({ error, key: 'minecraftMaps' });
+    }, [ error ]); 
 
-# ServerRouter.tsx - Imports & Variables
-cat << 'CODE_EOF' > router_import.txt
-import MinecraftMapsContainer from '@/components/server/maps/MinecraftMapsContainer';
-CODE_EOF
-sed -i -e "/import FileManagerContainer /r router_import.txt" resources/scripts/routers/ServerRouter.tsx
+    if (!minecraftMaps || (error && isValidating)) {
+        return <Spinner size={'large'} centered/>;
+    } 
 
-cat << 'CODE_EOF' > router_const.txt
-    const nestId = ServerContext.useStoreState(state => state.server.data?.nestId);
-CODE_EOF
-sed -i -e "/const serverId = /r router_const.txt" resources/scripts/routers/ServerRouter.tsx
+    return (
+        <ServerContentBlock title={'Minecraft Maps'}>
+            <FlashMessageRender byKey={'minecraftMaps'} css={tw`mb-4`}/>
+            <Formik
+                onSubmit={submit}
+                initialValues={{ search: searchFilter }}
+                validationSchema={object().shape({ search: string().optional().min(1) })}
+            >
+                <Form css={tw`mb-4`}>
+                    <Field id={'search'} name={'search'} label={'Search'} type={'text'} />
+                </Form>
+            </Formik>
+            <Pagination data={minecraftMaps} onPageSelect={setPage}>
+                {({ items }) => (
+                    !items.length ?
+                        <p css={tw`text-center text-sm text-neutral-300`}>
+                            {page > 1 ?
+                                'Looks like we\'ve run out of Minecraft maps to show you, try going back a page.'
+                                :
+                                'It looks like there are no Minecraft maps matching search criteria.'
+                            }
+                        </p>
+                        :
+                        items.map((minecraftMap, index) => <MinecraftMapsRow
+                            key={minecraftMap.id}
+                            minecraftMap={minecraftMap}
+                            css={index > 0 ? tw`mt-2` : undefined}
+                        />)
+                )}
+            </Pagination>
+        </ServerContentBlock>
+    );
+}; 
 
-# ServerRouter.tsx - NavLink Block
-cat << 'CODE_EOF' > router_nav.txt
-            {nestId === 1 &&
-            <Can action={'file.*'}>
-                <NavLink to={`${match.url}/maps`}>Maps</NavLink>
-            </Can>
-            }
-CODE_EOF
-awk 'NR==FNR{a=a$0"\n";next} /File Manager<\/NavLink>/{print; getline; print; printf "%s", a; next}1' router_nav.txt resources/scripts/routers/ServerRouter.tsx > tmp.tsx && mv tmp.tsx resources/scripts/routers/ServerRouter.tsx
+export default () => {
+    const [ page, setPage ] = useState<number>(1);
+    const [ searchFilter, setSearchFilter ] = useState<string>(''); 
 
-# ServerRouter.tsx - Route Block
-cat << 'CODE_EOF' > router_route.txt
-            {nestId === 1 &&
-            <Route path={`${match.path}/maps`} exact>
-                <RequireServerPermission permissions={'file.*'}>
-                    <MinecraftMapsContainer/>
-                </RequireServerPermission>
-            </Route>
-            }
-CODE_EOF
-awk 'NR==FNR{a=a$0"\n";next} /<FileEditContainer\/>/{print; getline; print; getline; print; printf "%s", a; next}1' router_route.txt resources/scripts/routers/ServerRouter.tsx > tmp.tsx && mv tmp.tsx resources/scripts/routers/ServerRouter.tsx
+    return (
+        <ServerMinecraftMapsContext.Provider value={{ page, setPage, searchFilter, setSearchFilter }}>
+            <MinecraftMapsContainer/>
+        </ServerMinecraftMapsContext.Provider>
+    );
+};
+EOF 
 
-# অপ্রয়োজনীয় টেম্প ফাইল ডিলিট
-rm cc_uses.txt cc_func.txt route_mod.txt transformer_mod.txt ts1.txt ts2.txt router_import.txt router_const.txt router_nav.txt router_route.txt
+# ৪. MinecraftMapsRow.tsx ফাইল তৈরি
+cat << 'EOF' > resources/scripts/components/server/maps/MinecraftMapsRow.tsx
+import React, { useCallback, useState } from 'react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faDownload } from '@fortawesome/free-solid-svg-icons';
+import { format, formatDistanceToNow } from 'date-fns';
+import tw from 'twin.macro';
+import useFlash from '@/plugins/useFlash';
+import GreyRowBox from '@/components/elements/GreyRowBox';
+import SpinnerOverlay from '@/components/elements/SpinnerOverlay';
+import { ServerContext } from '@/state/server';
+import Select from '@/components/elements/Select';
+import http from '@/api/http'; 
 
-# ৭. ইয়ার্ন ডিপেন্ডেন্সি এবং প্রোডাকশন বিল্ড (OpenSSL Fix সহ)
-echo "* Installing Yarn dependencies..."
-yarn install
+interface Props {
+    minecraftMap: any;
+    className?: string;
+} 
 
-echo "* Applying OpenSSL Legacy Fix before production build..."
-export NODE_OPTIONS=--openssl-legacy-provider
+export default ({ minecraftMap, className }: Props) => {
+    const uuid = ServerContext.useStoreState(state => state.server.data!.uuid);
+    const { clearAndAddHttpError, addFlash } = useFlash();
+    let url = minecraftMap.files[0]?.downloadUrl; 
 
-echo "* Building Production Assets (This may take a few minutes)..."
-yarn run build:production
+    const updateSelectedFile = useCallback((v: React.ChangeEvent<HTMLSelectElement>) => {
+        url = v.currentTarget.value;
+    }, [ uuid, url ]); 
 
-echo "==============================================="
-echo " Build Complete! Check your Panel."
-echo "==============================================="
+    const installMap = () => {
+        if (url === null || url === undefined) return; 
+
+    http.post(`/api/client/servers/${uuid}/files/pull`, { directory: '/', url: encodeURI(url) })
+.then(function () {
+addFlash({ type: 'success', key: 'minecraftMaps', message: 'File has been scheduled for downloading.' });
+})
+.catch(function (error) {
+    clearAndAddHttpError({ key: 'minecraftMaps', error });
+});
+    }; 
+
+    return (
+        <GreyRowBox css={tw`flex-wrap md:flex-nowrap items-center`} className={className}>
+            <div css={tw`flex items-center truncate w-full md:flex-1`}>
+                <div css={tw`flex flex-col truncate`}>
+                    <div css={tw`flex items-center text-sm mb-1`}>
+                        <div css={tw`w-10 h-10 rounded-lg bg-white border-2 border-neutral-800 overflow-hidden hidden md:block`}>
+                            <img css={tw`w-full h-full`} alt={minecraftMap.name} src={minecraftMap.logo.thumbnailUrl}/>
+                        </div>
+                        <a href={minecraftMap.websiteUrl} css={tw`ml-4 break-words truncate`}>
+                            {minecraftMap.name}
+                        </a>
+                    </div>
+                    <p css={tw`mt-1 md:mt-0 text-xs truncate`}>
+                        {minecraftMap.categories.map((category: any, index: any) => (
+                            <img css={index > 0 ? tw`ml-1 w-4 h-auto inline` : tw`w-4 h-auto inline`} key={category.categoryId} src={category.iconUrl} alt={category.name} title={category.name} />
+                        ))}
+                    </p>
+                </div>
+            </div>
+            <div css={tw`flex-1 md:flex-none md:w-96 mt-4 md:mt-0 md:ml-8 md:text-center`}>
+                <p css={tw`text-sm`}>
+                    {minecraftMap.summary}
+                </p>
+            </div>
+            <div css={tw`flex-1 md:flex-none md:w-48 mt-4 md:mt-0 md:ml-8 md:text-center`}>
+                <p
+                    title={format(new Date(minecraftMap.dateReleased), 'ddd, MMMM do, yyyy HH:mm:ss')}
+                    css={tw`text-sm`}
+                >
+                    {formatDistanceToNow(new Date(minecraftMap.dateReleased), { includeSeconds: true, addSuffix: true })}
+                </p>
+                <p css={tw`text-2xs text-neutral-500 uppercase mt-1`}>Released</p>
+            </div>
+            <div css={tw`flex-1 md:flex-none md:w-48 mt-4 md:mt-0 md:ml-8 md:text-center`}>
+                <Select
+                    disabled={minecraftMap.files.length < 2}
+                    onChange={updateSelectedFile}
+                    defaultValue={minecraftMap.files[0]?.id}
+                >
+                    {minecraftMap.files.map((file: any) => (
+                        <option key={file.id} value={file.downloadUrl}>{file.displayName}</option>
+                    ))}
+                </Select>
+            </div>
+            <div css={tw`mt-4 md:mt-0 ml-6`} style={{ marginRight: '-0.5rem' }}>
+                <button
+                    type={'button'}
+                    aria-label={'Install'}
+                    css={tw`block text-sm p-1 md:p-2 text-neutral-500 hover:text-neutral-100 transition-colors duration-150 mx-4`}
+                    onClick={installMap}
+                >
+                    <FontAwesomeIcon icon={faDownload} />
+                </button>
+            </div>
+        </GreyRowBox>
+    );
+};
+EOF 
+
+# ৫. কোর ফাইলগুলোতে কোড প্যাচ করা (Backend & Routes)
+echo -e "\n${YELLOW}Patching Core Files...${NC}"
+sleep 1
+grep -q "ClientController::class, 'curse'" routes/api-client.php || echo "Route::get('/curse', [Client\ClientController::class, 'curse']);" >> routes/api-client.php 
+
+sed -i "s/'uuid' => \$server->uuid,/'internal_id' => \$server->id,\n            'nest_id' => \$server->nest_id,\n            'uuid' => \$server->uuid,/g" app/Transformers/Api/Client/ServerTransformer.php 
+
+php -r '
+$f="app/Http/Controllers/Api/Client/ClientController.php";
+$c=file_get_contents($f);
+if(!strpos($c,"function curse(")){
+    $c=str_replace("namespace Pterodactyl\Http\Controllers\Api\Client;","namespace Pterodactyl\Http\Controllers\Api\Client;\n\nuse Illuminate\Http\Request;\nuse Illuminate\Support\Facades\Http;\nuse Illuminate\Support\Facades\Cache;",$c);
+    $m="\n    public function curse(Request \$request)\n    {\n        \$headers = [\"x-api-key\" => env(\"CURSEFORGE_API\")];\n\n        \$response = Http::withHeaders(\$headers)->get(\"https://api.curseforge.com/v1/mods/search\", [\n            \"index\" => \$request[\"index\"],\n            \"pageSize\" => \$request[\"pageSize\"],\n            \"gameId\" => \$request[\"gameId\"],\n            \"classId\" => \$request[\"sectionId\"],\n            \"searchFilter\" => \$request[\"searchFilter\"],\n            \"sortField\" => 2,\n            \"sortOrder\" => \"desc\"\n        ])->json();\n\n        \$mods = collect(\$response[\"data\"])->map(function (\$mod) use (\$request, \$headers) {\n            foreach (\$mod[\"latestFiles\"] as &\$modFile) {\n                \$modFile[\"downloadUrl\"] = str_replace(\"edge\", \"mediafiles\", \$modFile[\"downloadUrl\"]);\n            }\n            return \$mod;\n        });\n\n        return [\n            \"mods\" => \$mods,\n            \"pagination\" => \$response[\"pagination\"],\n        ];\n    }";
+    $c=preg_replace("/}\s*$/", $m."\n}", $c);
+    file_put_contents($f,$c);
+}' 
+
+# ৬. কোর ফাইলগুলোতে কোড প্যাচ করা (Frontend TypeScript)
+sed -i "s/uuid: string;/internalId: number | string;\n    nestId: number | string;\n    uuid: string;/g" resources/scripts/api/server/getServer.ts
+sed -i "s/uuid: data.uuid,/internalId: data.internal_id,\n        nestId: data.nest_id,\n        uuid: data.uuid,/g" resources/scripts/api/server/getServer.ts 
+
+# Node.js ব্যবহার করে Arix এর ServerRouter এডিট করা
+node -e "
+const fs = require('fs');
+let file = fs.readFileSync('resources/scripts/routers/ServerRouter.tsx', 'utf8'); 
+
+if(!file.includes('MinecraftMapsContainer')) {
+    file = file.replace(/import \{ ServerContext \} from '@\/state\/server';/, \"import { ServerContext } from '@/state/server';\\nimport MinecraftMapsContainer from '@/components/server/maps/MinecraftMapsContainer';\");
+    
+    file = file.replace(/const serverId = ServerContext\.useStoreState\(state => state\.server\.data(!|\?)\.internalId\);/, \"const serverId = ServerContext.useStoreState(state => state.server.data\$1.internalId);\\n    const nestId = ServerContext.useStoreState(state => state.server.data\$1.nestId);\");
+    
+    file = file.replace(/<Can action=\{'database\.\*'\}>/g, \"{nestId === 1 && (\\n                                <Can action={'file.*'}>\\n                                    <NavLink to={\`\${match.url}/maps\`}>Maps</NavLink>\\n                                </Can>\\n                            )}\\n                            <Can action={'database.*'}>\");
+    
+    file = file.replace(/<Route path=\{\`\\\$\\{match\.path\\}\/databases\`\} exact>/g, \"{nestId === 1 && (\\n                                <Route path={\`\${match.path}/maps\`} exact>\\n                                    <RequireServerPermission permissions={'file.*'}>\\n                                        <MinecraftMapsContainer/>\\n                                    </RequireServerPermission>\\n                                </Route>\\n                            )}\\n                            <Route path={\`\${match.path}/databases\`} exact>\");
+    
+    fs.writeFileSync('resources/scripts/routers/ServerRouter.tsx', file);
+}
+" 
+
+# ৭. বিল্ড ও অপ্টিমাইজেশন
+echo -e "\n${YELLOW}Building Pterodactyl Assets (Phase 1)...${NC}\n"
+sleep 1
+chown -R www-data:www-data /var/www/pterodactyl/*
+chown -R www-data:www-data /var/www/pterodactyl/.*
+export NODE_OPTIONS="--openssl-legacy-provider --no-deprecation"
+yarn build:production
+php artisan view:clear
+php artisan optimize:clear 
+
+echo -e "\n${GREEN}Initial Installation Steps Complete! 🚀${NC}\n" 
+sleep 1
+
+cd /var/www/pterodactyl 
+
+# কোর ফাইলগুলোতে কোড প্যাচ করা (Frontend TypeScript)
+grep -q "internalId: number" resources/scripts/api/server/getServer.ts || sed -i "s/uuid: string;/internalId: number | string;\n    nestId: number | string;\n    uuid: string;/g" resources/scripts/api/server/getServer.ts 
+
+grep -q "internalId: data.internal_id" resources/scripts/api/server/getServer.ts || sed -i "s/uuid: data.uuid,/internalId: data.internal_id,\n        nestId: data.nest_id,\n        uuid: data.uuid,/g" resources/scripts/api/server/getServer.ts 
+
+# Node.js স্ক্রিপ্ট দিয়ে ServerRouter.tsx এডিট করা (নিরাপদ পদ্ধতি)
+cat << 'EOF' > patch_router.js
+const fs = require('fs');
+let file = fs.readFileSync('resources/scripts/routers/ServerRouter.tsx', 'utf8'); 
+
+if(!file.includes('MinecraftMapsContainer')) {
+    file = file.replace(/import \{ ServerContext \} from '@\/state\/server';/, "import { ServerContext } from '@/state/server';\nimport MinecraftMapsContainer from '@/components/server/maps/MinecraftMapsContainer';");
+    
+    file = file.replace(/const serverId = ServerContext\.useStoreState\(state => state\.server\.data(!|\?)\.internalId\);/, "const serverId = ServerContext.useStoreState(state => state.server.data$1.internalId);\n    const nestId = ServerContext.useStoreState(state => state.server.data$1.nestId);");
+    
+    file = file.replace(/<Can action=\{'database\.\*'\}>/g, "{nestId === 1 && (\n                                <Can action={'file.*'}>\n                                    <NavLink to={`${match.url}/maps`}>Maps</NavLink>\n                                </Can>\n                            )}\n                            <Can action={'database.*'}>");
+    
+    file = file.replace(/<Route path=\{\`\$\{match\.path\}\/databases\`\} exact>/g, "{nestId === 1 && (\n                                <Route path={`${match.path}/maps`} exact>\n                                    <RequireServerPermission permissions={'file.*'}>\n                                        <MinecraftMapsContainer/>\n                                    </RequireServerPermission>\n                                </Route>\n                            )}\n                            <Route path={`${match.path}/databases`} exact>");
+    
+    fs.writeFileSync('resources/scripts/routers/ServerRouter.tsx', file);
+    console.log("ServerRouter patched successfully!");
+} else {
+    console.log("ServerRouter already patched.");
+}
+EOF
+node patch_router.js
+rm patch_router.js 
+
+# বিল্ড ও অপ্টিমাইজেশন (Asset Building)
+echo -e "\n${YELLOW}Building Pterodactyl Assets (Phase 2)...${NC}\n"
+sleep 1
+chown -R www-data:www-data /var/www/pterodactyl/*
+chown -R www-data:www-data /var/www/pterodactyl/.*
+export NODE_OPTIONS="--openssl-legacy-provider --no-deprecation"
+yarn build:production
+php artisan view:clear
+php artisan optimize:clear 
+
+echo -e "\n${GREEN}Phase 2 Complete! 🚀${NC}\n" 
+sleep 1
+
+cd /var/www/pterodactyl 
+
+# আপনার আগের যুক্ত করা ম্যানুয়াল রাউটগুলো ক্লিন করা
+git checkout resources/scripts/routers/ServerRouter.tsx 
+
+# ফাইলের পারমিশন ঠিক করা
+chown -R www-data:www-data /var/www/pterodactyl/*
+chown -R www-data:www-data /var/www/pterodactyl/.*
+chmod -R 755 storage/* bootstrap/cache/ 
+
+# Arix থিমের সাথে অ্যাসেট রিবিল্ড করা
+echo -e "\n${YELLOW}Building Pterodactyl Assets (Phase 3 - Arix Theme)...${NC}\n"
+sleep 1
+export NODE_OPTIONS="--openssl-legacy-provider --no-deprecation"
+yarn build:production 
+
+# লারাভেল ক্যাশ ক্লিয়ার করা
+php artisan view:clear
+php artisan optimize:clear 
+
+cd /var/www/pterodactyl 
+
+# Node.js দিয়ে নিরাপদভাবে routes.ts ফাইলে কোড বসানো হচ্ছে
+cat << 'EOF' > patch_routes.js
+const fs = require('fs');
+const path = 'resources/scripts/routers/routes.ts';
+let file = fs.readFileSync(path, 'utf8'); 
+
+if(!file.includes('MinecraftMapsContainer')) {
+    // ইম্পোর্ট লাইন যুক্ত করা হচ্ছে
+    file = file.replace(
+        "import AccountSecurityContainer from '@/components/dashboard/account/AccountSecurityContainer';",
+        "import AccountSecurityContainer from '@/components/dashboard/account/AccountSecurityContainer';\nimport MinecraftMapsContainer from '@/components/server/maps/MinecraftMapsContainer';"
+    );
+    
+    // সার্ভার রাউটের ভেতরে Maps পেজের রুট যুক্ত করা হচ্ছে (nestIds: 1 মানে শুধু মাইনক্রাফটে দেখাবে)
+    const mapRoute = `
+        {
+            path: '/maps',
+            permission: 'file.*',
+            name: 'maps',
+            nestIds: [1],
+            component: MinecraftMapsContainer,
+        },`;
+    
+    file = file.replace(/server:\s*\[/, "server: [" + mapRoute);
+    
+    fs.writeFileSync(path, file);
+    console.log("routes.ts patched successfully!");
+} else {
+    console.log("routes.ts already patched.");
+}
+EOF 
+
+node patch_routes.js
+rm patch_routes.js 
+
+# প্যানেল রিবিল্ড করা হচ্ছে
+echo -e "\n${YELLOW}Building Pterodactyl Assets (Phase 4)...${NC}\n"
+sleep 1
+chown -R www-data:www-data /var/www/pterodactyl/*
+chown -R www-data:www-data /var/www/pterodactyl/.*
+export NODE_OPTIONS="--openssl-legacy-provider --no-deprecation"
+yarn build:production
+php artisan view:clear
+php artisan optimize:clear
+cd /var/www/pterodactyl 
+
+# ত্রুটিযুক্ত ফাইলটিকে ক্র্যাশ-প্রুফ কোড দিয়ে রিপ্লেস করা হচ্ছে
+cat << 'EOF' > resources/scripts/components/server/maps/MinecraftMapsRow.tsx
+import React, { useCallback } from 'react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faDownload } from '@fortawesome/free-solid-svg-icons';
+import { format, formatDistanceToNow } from 'date-fns';
+import tw from 'twin.macro';
+import useFlash from '@/plugins/useFlash';
+import GreyRowBox from '@/components/elements/GreyRowBox';
+import { ServerContext } from '@/state/server';
+import Select from '@/components/elements/Select';
+import http from '@/api/http'; 
+
+interface Props {
+    minecraftMap: any;
+    className?: string;
+} 
+
+export default ({ minecraftMap, className }: Props) => {
+    const uuid = ServerContext.useStoreState(state => state.server.data!.uuid);
+    const { clearAndAddHttpError, addFlash } = useFlash();
+    
+    // বাগ ফিক্স: files এবং latestFiles দুটোই চেক করবে
+    const files = minecraftMap.files || minecraftMap.latestFiles || [];
+    let url = files[0]?.downloadUrl; 
+
+    const updateSelectedFile = useCallback((v: React.ChangeEvent<HTMLSelectElement>) => {
+        url = v.currentTarget.value;
+    }, [ uuid, url ]); 
+
+    const installMap = () => {
+        if (!url) return; 
+
+        http.post(`/api/client/servers/${uuid}/files/pull`, { directory: '/', url: encodeURI(url) })
+        .then(function () {
+            addFlash({ type: 'success', key: 'minecraftMaps', message: 'File has been scheduled for downloading.' });
+        })
+        .catch(function (error) {
+            clearAndAddHttpError({ key: 'minecraftMaps', error });
+        });
+    }; 
+
+    return (
+        <GreyRowBox css={tw`flex-wrap md:flex-nowrap items-center`} className={className}>
+            <div css={tw`flex items-center truncate w-full md:flex-1`}>
+                <div css={tw`flex flex-col truncate`}>
+                    <div css={tw`flex items-center text-sm mb-1`}>
+                        <div css={tw`w-10 h-10 rounded-lg bg-white border-2 border-neutral-800 overflow-hidden hidden md:block`}>
+                            {/* বাগ ফিক্স: লোগো না থাকলে ক্র্যাশ করবে না */}
+                            {minecraftMap.logo?.thumbnailUrl && (
+                                <img css={tw`w-full h-full`} alt={minecraftMap.name} src={minecraftMap.logo.thumbnailUrl}/>
+                            )}
+                        </div>
+                        <a href={minecraftMap.websiteUrl} css={tw`ml-4 break-words truncate`}>
+                            {minecraftMap.name}
+                        </a>
+                    </div>
+                    <p css={tw`mt-1 md:mt-0 text-xs truncate`}>
+                        {/* বাগ ফিক্স: ক্যাটাগরি না থাকলে ক্র্যাশ করবে না */}
+                        {(minecraftMap.categories || []).map((category: any, index: any) => (
+                            <img css={index > 0 ? tw`ml-1 w-4 h-auto inline` : tw`w-4 h-auto inline`} key={category.categoryId} src={category.iconUrl} alt={category.name} title={category.name} />
+                        ))}
+                    </p>
+                </div>
+            </div>
+            <div css={tw`flex-1 md:flex-none md:w-96 mt-4 md:mt-0 md:ml-8 md:text-center`}>
+                <p css={tw`text-sm truncate`}>
+                    {minecraftMap.summary || 'No description provided.'}
+                </p>
+            </div>
+            <div css={tw`flex-1 md:flex-none md:w-48 mt-4 md:mt-0 md:ml-8 md:text-center`}>
+                <p
+                    title={minecraftMap.dateReleased ? format(new Date(minecraftMap.dateReleased), 'MMM do, yyyy') : 'Unknown'}
+                    css={tw`text-sm`}
+                >
+                    {minecraftMap.dateReleased ? formatDistanceToNow(new Date(minecraftMap.dateReleased), { addSuffix: true }) : 'Unknown Date'}
+                </p>
+                <p css={tw`text-2xs text-neutral-500 uppercase mt-1`}>Released</p>
+            </div>
+            <div css={tw`flex-1 md:flex-none md:w-48 mt-4 md:mt-0 md:ml-8 md:text-center`}>
+                <Select
+                    disabled={files.length < 2}
+                    onChange={updateSelectedFile}
+                    defaultValue={files[0]?.id}
+                >
+                    {files.map((file: any) => (
+                        <option key={file.id} value={file.downloadUrl}>{file.displayName}</option>
+                    ))}
+                </Select>
+            </div>
+            <div css={tw`mt-4 md:mt-0 ml-6`} style={{ marginRight: '-0.5rem' }}>
+                <button
+                    type={'button'}
+                    aria-label={'Install'}
+                    css={tw`block text-sm p-1 md:p-2 text-neutral-500 hover:text-neutral-100 transition-colors duration-150 mx-4`}
+                    onClick={installMap}
+                >
+                    <FontAwesomeIcon icon={faDownload} />
+                </button>
+            </div>
+        </GreyRowBox>
+    );
+};
+EOF 
+
+# কোড ফিক্স হয়ে গেছে, এখন প্যানেল পুনরায় রিবিল্ড করা হচ্ছে
+echo -e "\n${YELLOW}Building Pterodactyl Assets (Phase 5)...${NC}\n"
+sleep 1
+chown -R www-data:www-data /var/www/pterodactyl/*
+export NODE_OPTIONS="--openssl-legacy-provider --no-deprecation"
+yarn build:production
+php artisan view:clear
+cd /var/www/pterodactyl 
+
+cat << 'EOF' > resources/scripts/components/server/maps/MinecraftMapsRow.tsx
+import React, { useCallback } from 'react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faDownload } from '@fortawesome/free-solid-svg-icons';
+import { format, formatDistanceToNow } from 'date-fns';
+import tw from 'twin.macro';
+import useFlash from '@/plugins/useFlash';
+import GreyRowBox from '@/components/elements/GreyRowBox';
+import { ServerContext } from '@/state/server';
+import Select from '@/components/elements/Select';
+import http from '@/api/http'; 
+
+interface Props {
+    minecraftMap: any;
+    className?: string;
+} 
+
+export default ({ minecraftMap, className }: Props) => {
+    const uuid = ServerContext.useStoreState(state => state.server.data!.uuid);
+    const { clearAndAddHttpError, addFlash } = useFlash();
+    
+    const files = minecraftMap.files || minecraftMap.latestFiles || [];
+    let url = files[0]?.downloadUrl; 
+
+    const updateSelectedFile = useCallback((v: React.ChangeEvent<HTMLSelectElement>) => {
+        url = v.currentTarget.value;
+    }, [ uuid, url ]); 
+
+    const installMap = () => {
+        if (!url) return; 
+
+        http.post(`/api/client/servers/${uuid}/files/pull`, { directory: '/', url: encodeURI(url) })
+        .then(function () {
+            addFlash({ type: 'success', key: 'minecraftMaps', message: 'File has been scheduled for downloading.' });
+        })
+        .catch(function (error) {
+            clearAndAddHttpError({ key: 'minecraftMaps', error });
+        });
+    }; 
+
+    return (
+        <GreyRowBox css={tw`flex-wrap xl:flex-nowrap items-center`} className={className}>
+            <div css={tw`flex items-center truncate w-full xl:flex-1`}>
+                <div css={tw`flex flex-col truncate`}>
+                    <div css={tw`flex items-center text-sm mb-1`}>
+                        <div css={tw`w-10 h-10 rounded-lg bg-white border-2 border-neutral-800 overflow-hidden hidden md:block`}>
+                            {minecraftMap.logo?.thumbnailUrl && (
+                                <img css={tw`w-full h-full`} alt={minecraftMap.name} src={minecraftMap.logo.thumbnailUrl}/>
+                            )}
+                        </div>
+                        <a href={minecraftMap.websiteUrl} css={tw`ml-4 break-words truncate`}>
+                            {minecraftMap.name}
+                        </a>
+                    </div>
+                    <p css={tw`mt-1 md:mt-0 text-xs truncate`}>
+                        {(minecraftMap.categories || []).map((category: any, index: any) => (
+                            <img css={index > 0 ? tw`ml-1 w-4 h-auto inline` : tw`w-4 h-auto inline`} key={category.categoryId} src={category.iconUrl} alt={category.name} title={category.name} />
+                        ))}
+                    </p>
+                </div>
+            </div>
+            
+            {/* ডেসক্রিপশন শুধুমাত্র অনেক বড় স্ক্রিনে দেখাবে, যাতে ওভারফ্লো না হয় */}
+            <div css={tw`hidden 2xl:block flex-1 mt-4 xl:mt-0 xl:ml-8 xl:text-center`}>
+                <p css={tw`text-sm truncate`}>
+                    {minecraftMap.summary || 'No description provided.'}
+                </p>
+            </div>
+            
+            <div css={tw`flex-1 xl:flex-none xl:w-40 mt-4 xl:mt-0 xl:ml-8 xl:text-center`}>
+                <p title={minecraftMap.dateReleased ? format(new Date(minecraftMap.dateReleased), 'MMM do, yyyy') : 'Unknown'} css={tw`text-sm`}>
+                    {minecraftMap.dateReleased ? formatDistanceToNow(new Date(minecraftMap.dateReleased), { addSuffix: true }) : 'Unknown Date'}
+                </p>
+                <p css={tw`text-2xs text-neutral-500 uppercase mt-1`}>Released</p>
+            </div>
+            
+            <div css={tw`flex-1 xl:flex-none xl:w-48 mt-4 xl:mt-0 xl:ml-8 xl:text-center`}>
+                <Select disabled={files.length < 2} onChange={updateSelectedFile} defaultValue={files[0]?.id}>
+                    {files.map((file: any) => (
+                        <option key={file.id} value={file.downloadUrl}>{file.displayName}</option>
+                    ))}
+                </Select>
+            </div>
+            
+            <div css={tw`mt-4 xl:mt-0 ml-4`} style={{ marginRight: '-0.5rem' }}>
+                <button type={'button'} aria-label={'Install'} css={tw`block text-sm p-1 md:p-2 text-neutral-500 hover:text-neutral-100 transition-colors duration-150 mx-4`} onClick={installMap}>
+                    <FontAwesomeIcon icon={faDownload} />
+                </button>
+            </div>
+        </GreyRowBox>
+    );
+};
+EOF 
+
+# ইউআই পারফেক্ট করার পর প্যানেল রিবিল্ড করা হচ্ছে
+echo -e "\n${YELLOW}Building Pterodactyl Assets (Final Phase)...${NC}\n"
+sleep 1
+chown -R www-data:www-data /var/www/pterodactyl/*
+export NODE_OPTIONS="--openssl-legacy-provider --no-deprecation"
+yarn build:production
+php artisan view:clear
+chown -R www-data:www-data /var/www/pterodactyl/*
+chown -R www-data:www-data /var/www/pterodactyl/.* 
+
+echo -e "\n${GREEN}====================================================${NC}"
+animate_text "   All Installations and Builds Completed Successfully! 🎉"
+echo -e "${GREEN}====================================================${NC}\n"
+
